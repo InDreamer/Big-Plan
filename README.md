@@ -1,3 +1,38 @@
+private static List<PartitionInfo> getPartitionsInfo(Connection conn) throws SQLException {
+    List<PartitionInfo> partitions = new ArrayList<>();
+    String sql = "SELECT partition_name, " +
+                 "CASE " +
+                 "  WHEN interval IS NOT NULL THEN " +
+                 "    TO_DATE(TRIM(TRAILING ')' FROM TRIM(LEADING 'TIMESTAMP' FROM high_value))) " +
+                 "  ELSE " +
+                 "    TO_DATE(TRIM(BOTH '''' FROM TRIM(LEADING 'TO_DATE(' FROM TRIM(TRAILING ')' FROM high_value)))) " +
+                 "END AS partition_date " +
+                 "FROM user_tab_partitions " +
+                 "WHERE table_name = 'MESSAGE_JOURNAL' " +
+                 "ORDER BY partition_position";
+    
+    try (Statement stmt = conn.createStatement();
+         ResultSet rs = stmt.executeQuery(sql)) {
+        while (rs.next()) {
+            String partitionName = rs.getString("partition_name");
+            Date partitionDate = rs.getDate("partition_date");
+            partitions.add(new PartitionInfo(partitionName, partitionDate));
+        }
+    }
+    return partitions;
+}
+
+private static class PartitionInfo {
+    String name;
+    Date date;
+
+    PartitionInfo(String name, Date date) {
+        this.name = name;
+        this.date = date;
+    }
+}
+
+
 import java.sql.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
