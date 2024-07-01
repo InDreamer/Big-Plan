@@ -128,3 +128,79 @@ public class DatabaseOptimizer {
         // }
     }
 }
+
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Statement;
+
+public class PartitionHousekeeping {
+    private static final String DB_URL = "jdbc:oracle:thin:@your_db_host:1521:your_service_name";
+    private static final String DB_USER = "your_username";
+    private static final String DB_PASSWORD = "your_password";
+    private static final String TABLE_NAME = "message_journal";
+    private static final String SCHEMA_NAME = "your_schema";
+    private static final int MONTHS_TO_KEEP = 3;
+
+    public static void main(String[] args) {
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            deleteOldPartitions(conn);
+            compressPartitions(conn);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void deleteOldPartitions(Connection conn) throws Exception {
+        String query = "SELECT partition_name FROM dba_tab_partitions " +
+                       "WHERE table_owner = ? AND table_name = ? AND " +
+                       "TO_DATE(partition_name, 'YYYYMM') < TO_CHAR(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -?), 'YYYYMM')";
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, SCHEMA_NAME.toUpperCase());
+            pstmt.setString(2, TABLE_NAME.toUpperCase());
+            pstmt.setInt(3, MONTHS_TO_KEEP);
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    String partitionName = rs.getString("partition_name");
+                    String dropPartitionSql = "ALTER TABLE " + SCHEMA_NAME + "." + TABLE_NAME + " DROP PARTITION " + partitionName;
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute(dropPartitionSql);
+                        System.out.println("Dropped partition: " + partitionName);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void compressPartitions(Connection conn) throws Exception {
+        String query = "SELECT partition_name FROM dba_tab_partitions " +
+                       "WHERE table_owner = ? AND table_name = ? AND " +
+                       "partition_position <= (SELECT MAX(partition_position) - ? " +
+                       "FROM dba_tab_partitions WHERE table_owner = ? AND table_name = ?)";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, SCHEMA_NAME.toUpperCase());
+            pstmt.setString(2, TABLE_NAME.toUpperCase());
+            pstmt.setInt(3, MONTHS_TO_KEEP);
+            pstmt.setString(4, SCHEMA_NAME.toUpperCase());
+            pstmt.setString(5, TABLE_NAME.toUpperCase());
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    String partitionName = rs.getString("partition_name");
+                    String compressPartitionSql = "ALTER TABLE " + SCHEMA_NAME + "." + TABLE_NAME + 
+                                                  " MOVE PARTITION " + partitionName + 
+                                                  " COMPRESS UPDATE INDEXES ONLINE";
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute(compressPartitionSql);
+                        System.out.println("Compressed partition: " + partitionName);
+                    }
+                }
+            }
+        }
+    }
+}
