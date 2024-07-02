@@ -1,3 +1,75 @@
+您说得对，我为之前的建议带来的问题道歉。确实，将子查询直接嵌入到 ALTER TABLE 语句中可能会导致 ORA-14006 错误。我们可以通过将查询分成两步来解决这个问题：首先查询分区名，然后执行 ALTER TABLE 语句。
+
+以下是修改后的方法，我们将使用两个 SQL 语句来完成每个分区的操作：
+
+1. 查询分区名
+2. 执行 ALTER TABLE 语句
+
+修改后的 dbarchive.properties 文件内容如下：
+
+```properties
+# 查询第二新的分区名
+dbarchive.job.query_partition2=SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 2
+
+# 压缩第二新的分区
+dbarchive.job.compress2=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION ${headers.partition_name} COMPRESS UPDATE INDEXES ONLINE
+
+# 查询第三新的分区名
+dbarchive.job.query_partition3=SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 3
+
+# 压缩第三新的分区
+dbarchive.job.compress3=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION ${headers.partition_name} COMPRESS UPDATE INDEXES ONLINE
+
+# 查询第四新的分区名
+dbarchive.job.query_partition4=SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 4
+
+# 压缩第四新的分区
+dbarchive.job.compress4=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION ${headers.partition_name} COMPRESS UPDATE INDEXES ONLINE
+```
+
+然后，您需要修改 Camel 路由来处理这些查询和压缩操作。以下是修改后的 Camel 路由示例：
+
+```xml
+<camelContext xmlns="http://camel.apache.org/schema/spring">
+    <propertyPlaceholder id="properties" location="classpath:application.properties,classpath:properties/dbarchive.properties" encoding="utf-8"/>
+    
+    <route autoStartup="true">
+        <from uri="timer://DBArchive?repeatCount=1" />
+        <log message="DB Archive Started...${date:now:yyyy-MM-dd HH:mm:ss.SSS}" />
+        
+        <!-- 处理第二新的分区 -->
+        <to uri="sql:{{dbarchive.job.query_partition2}}?dataSource=mlsDbDataSource"/>
+        <setHeader name="partition_name">
+            <simple>${body[0]['PARTITION_NAME']}</simple>
+        </setHeader>
+        <to uri="sql:{{dbarchive.job.compress2}}?dataSource=mlsDbDataSource"/>
+        
+        <!-- 处理第三新的分区 -->
+        <to uri="sql:{{dbarchive.job.query_partition3}}?dataSource=mlsDbDataSource"/>
+        <setHeader name="partition_name">
+            <simple>${body[0]['PARTITION_NAME']}</simple>
+        </setHeader>
+        <to uri="sql:{{dbarchive.job.compress3}}?dataSource=mlsDbDataSource"/>
+        
+        <!-- 处理第四新的分区 -->
+        <to uri="sql:{{dbarchive.job.query_partition4}}?dataSource=mlsDbDataSource"/>
+        <setHeader name="partition_name">
+            <simple>${body[0]['PARTITION_NAME']}</simple>
+        </setHeader>
+        <to uri="sql:{{dbarchive.job.compress4}}?dataSource=mlsDbDataSource"/>
+        
+        <log message="DB Archive Ended...${date:now:yyyy-MM-dd HH:mm:ss.SSS}" />
+        <process ref="camelStopProcessor" />
+    </route>
+</camelContext>
+```
+
+这种方法首先执行查询来获取分区名，将结果存储在 Camel 头部中，然后使用该头部值执行 ALTER TABLE 语句。这样可以避免 ORA-14006 错误，同时保持操作的灵活性。
+
+请注意，这个示例假设每个查询都会返回一个结果。如果可能没有足够的分区，您可能需要添加一些错误处理逻辑。
+
+另外，由于这些操作可能会耗时较长，您可能需要考虑增加数据库连接的超时设置，或者在每个操作之间添加一些延迟，以避免对数据库造成过大压力。
+
 为了将PL/SQL块添加到现有的Camel job中，你需要修改`dbarchive.properties`文件来包含新的PL/SQL语句，并更新Camel的配置以执行这些语句。
 
 ### 修改dbarchive.properties
