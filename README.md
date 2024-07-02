@@ -1,3 +1,54 @@
+您说得对，我为之前提供的繁琐解决方案道歉。您的观察非常准确，我们确实可以通过一次查询和一个通用的 ALTER 语句来简化这个过程。让我们重新设计一个更简洁、更通用的解决方案。
+
+以下是改进后的 dbarchive.properties 文件内容：
+
+```properties
+# 查询需要压缩的分区名
+dbarchive.job.query_partitions=SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn IN (2,3,4)
+
+# 压缩分区的通用语句
+dbarchive.job.compress_partition=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION ${headers.partition_name} COMPRESS UPDATE INDEXES ONLINE
+```
+
+然后，我们可以修改 Camel 路由来处理这个查询和压缩操作：
+
+```xml
+<camelContext xmlns="http://camel.apache.org/schema/spring">
+    <propertyPlaceholder id="properties" location="classpath:application.properties,classpath:properties/dbarchive.properties" encoding="utf-8"/>
+    
+    <route autoStartup="true">
+        <from uri="timer://DBArchive?repeatCount=1" />
+        <log message="DB Archive Started...${date:now:yyyy-MM-dd HH:mm:ss.SSS}" />
+        
+        <!-- 查询需要压缩的分区 -->
+        <to uri="sql:{{dbarchive.job.query_partitions}}?dataSource=mlsDbDataSource"/>
+        
+        <!-- 对每个分区执行压缩操作 -->
+        <split>
+            <simple>${body}</simple>
+            <setHeader name="partition_name">
+                <simple>${body['PARTITION_NAME']}</simple>
+            </setHeader>
+            <log message="Compressing partition: ${headers.partition_name}" />
+            <to uri="sql:{{dbarchive.job.compress_partition}}?dataSource=mlsDbDataSource"/>
+        </split>
+        
+        <log message="DB Archive Ended...${date:now:yyyy-MM-dd HH:mm:ss.SSS}" />
+        <process ref="camelStopProcessor" />
+    </route>
+</camelContext>
+```
+
+这个改进后的方案有以下优点：
+
+1. 只执行一次查询，获取所有需要压缩的分区名。
+2. 使用一个通用的 ALTER TABLE 语句来压缩分区，提高了代码的复用性。
+3. 使用 Camel 的 split 功能来遍历和处理每个分区，使代码更加简洁和灵活。
+4. 如果将来需要处理更多或更少的分区，只需修改查询语句中的 rn IN (2,3,4)，而不需要改变路由逻辑。
+
+这个解决方案更加简洁、通用，并且易于维护。它避免了重复代码，同时保持了良好的灵活性。如果您需要在未来增加或减少要处理的分区数量，只需要修改查询语句即可，而不需要改变 Camel 路由的结构。
+
+再次为之前的繁琐方案道歉，感谢您的反馈，这有助于提供更好的解决方案。
 您说得对，我为之前的建议带来的问题道歉。确实，将子查询直接嵌入到 ALTER TABLE 语句中可能会导致 ORA-14006 错误。我们可以通过将查询分成两步来解决这个问题：首先查询分区名，然后执行 ALTER TABLE 语句。
 
 以下是修改后的方法，我们将使用两个 SQL 语句来完成每个分区的操作：
