@@ -88,5 +88,77 @@ END;
 1. **PL/SQL语句**：确保PL/SQL语句在 `dbarchive.properties` 中是单行的。如果太长，可以使用转义符 `\` 换行。
 2. **Camel配置**：通过 `choice` 元素来区分是否要执行PL/SQL块。如果是 `compress_partitions`，则使用 `plsql` 组件，否则使用 `sql` 组件。
 3. **数据源**：确保 `mlsDbDataSource` 在 `initDBDataSource.xml` 中正确配置。
+通过这些修改，你的Camel job可以读取并执行新的PL/SQL块，完
+成对最新第二、第三和第四个分区的压缩任务。
 
-通过这些修改，你的Camel job可以读取并执行新的PL/SQL块，完成对最新第二、第三和第四个分区的压缩任务。
+你的 Camel 作业主要是执行存储在 properties 文件中的 SQL 语句。虽然 Camel 可以执行 PL/SQL 块，但为了保持一致性和简单性，我们可以将你的 PL/SQL 块转换为等效的 SQL 语句。这样，我们就可以将这些语句添加到你的 dbarchive.properties 文件中。
+
+以下是将 PL/SQL 块转换为一系列 SQL 语句的方法：
+
+1. 首先，我们需要一个查询来获取第二、第三和第四个最新的分区：
+
+```sql
+SELECT PARTITION_NAME
+FROM (
+    SELECT PARTITION_NAME,
+           ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn
+    FROM user_tab_partitions 
+    WHERE TABLE_NAME = 'MESSAGE_JOURNAL'
+)
+WHERE rn IN (2,3,4)
+```
+
+2. 然后，我们可以为每个分区创建单独的 ALTER TABLE 语句：
+
+```sql
+ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (
+    SELECT PARTITION_NAME
+    FROM (
+        SELECT PARTITION_NAME,
+               ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn
+        FROM user_tab_partitions 
+        WHERE TABLE_NAME = 'MESSAGE_JOURNAL'
+    )
+    WHERE rn = 2
+) COMPRESS UPDATE indexes ONLINE;
+
+ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (
+    SELECT PARTITION_NAME
+    FROM (
+        SELECT PARTITION_NAME,
+               ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn
+        FROM user_tab_partitions 
+        WHERE TABLE_NAME = 'MESSAGE_JOURNAL'
+    )
+    WHERE rn = 3
+) COMPRESS UPDATE indexes ONLINE;
+
+ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (
+    SELECT PARTITION_NAME
+    FROM (
+        SELECT PARTITION_NAME,
+               ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn
+        FROM user_tab_partitions 
+        WHERE TABLE_NAME = 'MESSAGE_JOURNAL'
+    )
+    WHERE rn = 4
+) COMPRESS UPDATE indexes ONLINE;
+```
+
+现在，你可以将这些 SQL 语句添加到你的 dbarchive.properties 文件中，如下所示：
+
+```properties
+dbarchive.job.compress1=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 2) COMPRESS UPDATE indexes ONLINE
+dbarchive.job.compress2=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 3) COMPRESS UPDATE indexes ONLINE
+dbarchive.job.compress3=ALTER TABLE MESSAGE_JOURNAL MOVE PARTITION (SELECT PARTITION_NAME FROM (SELECT PARTITION_NAME, ROW_NUMBER() OVER (ORDER BY PARTITION_POSITION DESC) AS rn FROM user_tab_partitions WHERE TABLE_NAME = 'MESSAGE_JOURNAL') WHERE rn = 4) COMPRESS UPDATE indexes ONLINE
+```
+
+最后，更新你的 application.properties 文件，将这些新的作业添加到 dbarchive.jobs 列表中：
+
+```properties
+dbarchive.jobs=main1,main2,cdu1,cdu2,cdu3,cdu4,shrink1,shrink2,compress1,compress2,compress3
+```
+
+这种方法将允许你在现有的 Camel 作业中执行这些新的压缩操作，而无需更改 Camel 路由或引入 PL/SQL 块。每个压缩操作都将作为单独的作业运行，这也使得监控和错误处理变得更加容易。
+
+请注意，这些 ALTER TABLE MOVE PARTITION 操作可能会消耗大量资源，特别是在大型表上。确保在非高峰时间运行这些操作，并密切监控其性能影响。
