@@ -1,21 +1,23 @@
 import org.apache.camel.Exchange;
 import org.apache.camel.Message;
-import org.apache.camel.impl.DefaultCamelContext;
-import org.apache.camel.impl.DefaultExchange;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
-import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.*;
 
-public class YourClassNameIT {
+@RunWith(PowerMockRunner.class)
+@PrepareForTest({File.class, Files.class})
+public class UVTCompareProcessorTest {
 
     @Mock
     private Exchange exchange;
@@ -23,12 +25,11 @@ public class YourClassNameIT {
     @Mock
     private Message message;
 
-    private YourClassName yourClass;
+    private UVTCompareProcessor processor;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        yourClass = new YourClassName();
+        processor = new UVTCompareProcessor();
         when(exchange.getIn()).thenReturn(message);
     }
 
@@ -45,20 +46,17 @@ public class YourClassNameIT {
         when(message.getHeader("CamelFileName", String.class)).thenReturn(fileName);
         when(message.getBody(String.class)).thenReturn(actualContent);
 
-        // Create a temporary file for the expected content
-        File tempFile = createTempFileWithContent(expectedContent);
-        
-        // Mock the File creation
-        try (MockedStatic<File> fileMock = mockStatic(File.class)) {
-            fileMock.when(() -> new File("/appmls/coordinator/projects/utilities/uvt/expected/Expected_" + fileName))
-                    .thenReturn(tempFile);
+        // Mock File and Files static methods
+        File mockFile = PowerMockito.mock(File.class);
+        PowerMockito.whenNew(File.class).withAnyArguments().thenReturn(mockFile);
+        PowerMockito.mockStatic(Files.class);
+        PowerMockito.when(Files.toString(any(File.class), any())).thenReturn(expectedContent);
 
-            // Execute the method
-            yourClass.process(exchange);
+        // Execute the method
+        processor.process(exchange);
 
-            // Verify the result
-            verify(message).setBody(argThat(arg -> arg.toString().contains("Difference found")));
-        }
+        // Verify the result
+        verify(message).setBody(argThat(arg -> arg.toString().contains("Difference found")));
     }
 
     @Test
@@ -73,26 +71,28 @@ public class YourClassNameIT {
         when(message.getHeader("CamelFileName", String.class)).thenReturn(fileName);
         when(message.getBody(String.class)).thenReturn(content);
 
-        // Create a temporary file for the expected content
-        File tempFile = createTempFileWithContent(content);
-        
-        // Mock the File creation
-        try (MockedStatic<File> fileMock = mockStatic(File.class)) {
-            fileMock.when(() -> new File("/appmls/coordinator/projects/utilities/uvt/expected/Expected_" + fileName))
-                    .thenReturn(tempFile);
+        // Mock File and Files static methods
+        File mockFile = PowerMockito.mock(File.class);
+        PowerMockito.whenNew(File.class).withAnyArguments().thenReturn(mockFile);
+        PowerMockito.mockStatic(Files.class);
+        PowerMockito.when(Files.toString(any(File.class), any())).thenReturn(content);
 
-            // Execute the method
-            yourClass.process(exchange);
+        // Execute the method
+        processor.process(exchange);
 
-            // Verify the result
-            verify(message).setBody("Those 2 files are exactly same");
-        }
-    }
-
-    private File createTempFileWithContent(String content) throws IOException {
-        File tempFile = File.createTempFile("expected", ".xml");
-        tempFile.deleteOnExit();
-        Files.write(tempFile.toPath(), content.getBytes(StandardCharsets.UTF_8));
-        return tempFile;
+        // Verify the result
+        verify(message).setBody("Those 2 files are exactly same");
     }
 }
+<dependency>
+    <groupId>org.powermock</groupId>
+    <artifactId>powermock-module-junit4</artifactId>
+    <version>2.0.9</version>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.powermock</groupId>
+    <artifactId>powermock-api-mockito2</artifactId>
+    <version>2.0.9</version>
+    <scope>test</scope>
+</dependency>
