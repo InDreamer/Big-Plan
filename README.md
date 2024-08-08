@@ -1,117 +1,113 @@
 ---
-- name: MLS Server Backup
+- name: MLS Server Restore
   hosts: all
   become: yes
   vars:
     backup_path: "/appmls/osupgrade"
-    error_log_path: "/var/log/ansible_backup_errors.log"
+    error_log_path: "/var/log/ansible_restore_errors.log"
 
   tasks:
-    - name: Ensure backup directory exists
-      file:
-        path: "{{ backup_path }}"
-        state: directory
-        mode: '0755'
-
     - name: Ensure error log file exists
       file:
         path: "{{ error_log_path }}"
         state: touch
         mode: '0644'
 
-    - name: Backup home directories
+    - name: Restore directories
       block:
-        - archive:
-            path: 
-              - /home/mwmls
-              - /home/misdev
-              - /home/astroidstp
-              - /home/imftuser28
-              - /home/itrs
-            dest: "{{ backup_path }}/{{ item }}.tar.gz"
-            format: gz
+        - unarchive:
+            src: "{{ backup_path }}/{{ item.name }}.tar.gz"
+            dest: "{{ item.path | dirname }}"
+            remote_src: yes
           loop:
-            - mwmls
-            - misdev
-            - astroidstp
-            - imftuser28
-            - itrs_home
+            - { name: 'mwmls', path: '/home/mwmls' }
+            - { name: 'misdev', path: '/home/misdev' }
+            - { name: 'astroidstp', path: '/home/astroidstp' }
+            - { name: 'imftuser28', path: '/home/imftuser28' }
+            - { name: 'itrs_home', path: '/home/itrs' }
+            - { name: 'rc_d', path: '/etc/rc.d' }
+            - { name: 'postfix', path: '/etc/postfix' }
+            - { name: 'limits_d_security', path: '/etc/security/limits.d' }
+            - { name: 'ITRS', path: '/opt/ITRS' }
       rescue:
-        - name: Log home directory backup error
+        - name: Log directory restore error
           lineinfile:
             path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error backing up {{ item }} home directory"
+            line: "{{ ansible_date_time.iso8601 }} - Error restoring directory: {{ item.name }} - {{ ansible_failed_result.msg }}"
           loop: "{{ ansible_failed_task.loop_items }}"
 
-    - name: Backup etc information
+    - name: Restore individual files
       block:
-        - archive:
-            path: "{{ item.path }}"
-            dest: "{{ backup_path }}/{{ item.name }}.tar.gz"
-            format: gz
+        - unarchive:
+            src: "{{ backup_path }}/{{ item.name }}.gz"
+            dest: "{{ item.path | dirname }}"
+            remote_src: yes
           loop:
             - { name: 'passwd', path: '/etc/passwd' }
             - { name: 'group', path: '/etc/group' }
             - { name: 'shadow', path: '/etc/shadow' }
             - { name: 'gshadow', path: '/etc/gshadow' }
-            - { name: 'ssh', path: '/etc/ssh/ssh_host*' }
-            - { name: 'rc_d', path: '/etc/rc.d' }
             - { name: 'hosts', path: '/etc/hosts' }
-            - { name: 'postfix', path: '/etc/postfix' }
-            - { name: 'network_ifcfg', path: '/etc/sysconfig/network-scripts/ifcfg*' }
             - { name: 'network', path: '/etc/sysconfig/network' }
-            - { name: 'sysctl', path: '/etc/sysctl.conf' }
-            - { name: 'limitsconf_etc_security', path: '/etc/security/limits.conf' }
-            - { name: 'access', path: '/etc/security/access.conf' }
-            - { name: 'limits_d_security', path: '/etc/security/limits.d' }
-            - { name: 'cron_allow', path: '/etc/cron.allow' }
+            - { name: 'sysctl.conf', path: '/etc/sysctl.conf' }
+            - { name: 'limits.conf', path: '/etc/security/limits.conf' }
+            - { name: 'access.conf', path: '/etc/security/access.conf' }
+            - { name: 'cron.allow', path: '/etc/cron.allow' }
       rescue:
-        - name: Log etc information backup error
+        - name: Log file restore error
           lineinfile:
             path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error backing up {{ item.name }} ({{ item.path }})"
+            line: "{{ ansible_date_time.iso8601 }} - Error restoring file: {{ item.name }} - {{ ansible_failed_result.msg }}"
           loop: "{{ ansible_failed_task.loop_items }}"
 
-    - name: Backup mail/cron information
+    - name: Restore SSH host keys
+      unarchive:
+        src: "{{ backup_path }}/ssh_host_keys.tar.gz"
+        dest: "/etc/ssh/"
+        remote_src: yes
+
+    - name: Restore network scripts
+      unarchive:
+        src: "{{ backup_path }}/network_scripts.tar.gz"
+        dest: "/etc/sysconfig/network-scripts/"
+        remote_src: yes
+
+    - name: Restore mail spool
+      unarchive:
+        src: "{{ backup_path }}/mail_mwmls.tar.gz"
+        dest: "/var/spool/mail/"
+        remote_src: yes
+
+    - name: Restore cron
+      unarchive:
+        src: "{{ backup_path }}/cron.tar.gz"
+        dest: "/var/spool/"
+        remote_src: yes
+
+    - name: Set correct ownership and permissions
       block:
-        - archive:
+        - file:
             path: "{{ item.path }}"
-            dest: "{{ backup_path }}/{{ item.name }}.tar.gz"
-            format: gz
+            owner: "{{ item.owner }}"
+            group: "{{ item.group }}"
+            mode: "{{ item.mode }}"
           loop:
-            - { name: 'mail', path: '/var/spool/mail/mwmls' }
-            - { name: 'cron', path: '/var/spool/cron' }
+            - { path: '/etc/passwd', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/group', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/shadow', owner: 'root', group: 'root', mode: '0000' }
+            - { path: '/etc/gshadow', owner: 'root', group: 'root', mode: '0000' }
+            - { path: '/etc/hosts', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/sysconfig/network', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/sysctl.conf', owner: 'root', group: 'root', mode: '0600' }
+            - { path: '/etc/security/limits.conf', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/security/access.conf', owner: 'root', group: 'root', mode: '0644' }
+            - { path: '/etc/cron.allow', owner: 'root', group: 'root', mode: '0644' }
       rescue:
-        - name: Log mail/cron backup error
+        - name: Log permission setting error
           lineinfile:
             path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error backing up {{ item.name }} ({{ item.path }})"
+            line: "{{ ansible_date_time.iso8601 }} - Error setting permissions: {{ item.path }} - {{ ansible_failed_result.msg }}"
           loop: "{{ ansible_failed_task.loop_items }}"
-
-    - name: Backup ITRS
-      block:
-        - archive:
-            path: "/opt/ITRS"
-            dest: "{{ backup_path }}/itrs.tar.gz"
-            format: gz
-      rescue:
-        - name: Log ITRS backup error
-          lineinfile:
-            path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error backing up ITRS (/opt/ITRS)"
-
-    - name: Set ownership of backup files
-      file:
-        path: "{{ backup_path }}"
-        owner: mwmls
-        group: swapswire
-        recurse: yes
-
-    - name: Set permissions on backup files
-      file:
-        path: "{{ backup_path }}"
-        mode: '0777'
-        recurse: yes
 
     - name: Display error log contents
       command: cat {{ error_log_path }}
