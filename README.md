@@ -1,118 +1,78 @@
----
-- name: MLS Server Restore
-  hosts: all
-  become: yes
-  vars:
-    backup_path: "/appmls/osupgrade"
-    error_log_path: "/var/log/ansible_restore_errors.log"
+import tkinter as tk
+from tkinter import filedialog
+import os
+import re
 
-  tasks:
-    - name: Ensure error log file exists
-      file:
-        path: "{{ error_log_path }}"
-        state: touch
-        mode: '0644'
+def extract_date_from_line(line):
+    # 假设日期在每行的开头，可能的格式有YYYY-MM-DD、YYYY/MM/DD、DD-MM-YYYY等
+    match = re.match(r'^(\d{4}-\d{2}-\d{2})', line)
+    if match:
+        return match.group(1)
+    match = re.match(r'^(\d{4}/\d{2}/\d{2})', line)
+    if match:
+        return match.group(1).replace('/', '-')
+    match = re.match(r'^(\d{2}-\d{2}-\d{4})', line)
+    if match:
+        day, month, year = match.group(1).split('-')
+        return f"{year}-{month}-{day}"
+    # 其他日期格式需要根据实际情况添加
+    return None
 
-    - name: Restore directories
-      block:
-        - unarchive:
-            src: "{{ backup_path }}/{{ item.name }}.tar.gz"
-            dest: "{{ item.path | dirname }}"
-            remote_src: yes
-          loop:
-            - { name: 'mwmls', path: '/home/mwmls' }
-            - { name: 'misdev', path: '/home/misdev' }
-            - { name: 'astroidstp', path: '/home/astroidstp' }
-            - { name: 'imftuser28', path: '/home/imftuser28' }
-            - { name: 'itrs_home', path: '/home/itrs' }
-            - { name: 'rc_d', path: '/etc/rc.d' }
-            - { name: 'postfix', path: '/etc/postfix' }
-            - { name: 'limits_d_security', path: '/etc/security/limits.d' }
-            - { name: 'ITRS', path: '/opt/ITRS' }
-      rescue:
-        - name: Log directory restore error
-          lineinfile:
-            path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error restoring directory: {{ item.name }} - {{ ansible_failed_result.msg }}"
-          loop: "{{ ansible_failed_task.loop_items }}"
+def split_txt_file():
+    MB_size = 100 * 1024 * 1024  # 100 MB
 
-    - name: Restore individual files
-      block:
-        - unarchive:
-            src: "{{ backup_path }}/{{ item.name }}.gz"
-            dest: "{{ item.path | dirname }}"
-            remote_src: yes
-          loop:
-            - { name: 'passwd', path: '/etc/passwd' }
-            - { name: 'group', path: '/etc/group' }
-            - { name: 'shadow', path: '/etc/shadow' }
-            - { name: 'gshadow', path: '/etc/gshadow' }
-            - { name: 'hosts', path: '/etc/hosts' }
-            - { name: 'network', path: '/etc/sysconfig/network' }
-            - { name: 'sysctl.conf', path: '/etc/sysctl.conf' }
-            - { name: 'limits.conf', path: '/etc/security/limits.conf' }
-            - { name: 'access.conf', path: '/etc/security/access.conf' }
-            - { name: 'cron.allow', path: '/etc/cron.allow' }
-      rescue:
-        - name: Log file restore error
-          lineinfile:
-            path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error restoring file: {{ item.name }} - {{ ansible_failed_result.msg }}"
-          loop: "{{ ansible_failed_task.loop_items }}"
+    # 创建隐藏的Tkinter根窗口
+    root = tk.Tk()
+    root.withdraw()
 
-    - name: Restore SSH host keys
-      unarchive:
-        src: "{{ backup_path }}/ssh_host_keys.tar.gz"
-        dest: "/etc/ssh/"
-        remote_src: yes
+    # 选择源txt文件
+    source_file = filedialog.askopenfilename(title="选择txt文件", filetypes=[("Text files", "*.txt")])
+    if not source_file:
+        print("未选择文件。")
+        return
 
-    - name: Restore network scripts
-      unarchive:
-        src: "{{ backup_path }}/network_scripts.tar.gz"
-        dest: "/etc/sysconfig/network-scripts/"
-        remote_src: yes
+    # 选择目标路径
+    output_dir = filedialog.askdirectory(title="选择输出目录")
+    if not output_dir:
+        print("未选择输出目录。")
+        return
 
-    - name: Restore mail spool
-      unarchive:
-        src: "{{ backup_path }}/mail_mwmls.tar.gz"
-        dest: "/var/spool/mail/"
-        remote_src: yes
+    # 检查文件大小
+    file_size = os.path.getsize(source_file)
+    if file_size < MB_size:
+        print("文件小于100MB，无需拆分。")
+        return
 
-    - name: Restore cron
-      unarchive:
-        src: "{{ backup_path }}/cron.tar.gz"
-        dest: "/var/spool/"
-        remote_src: yes
+    print("正在拆分文件，请稍候...")
 
-    - name: Set correct ownership and permissions
-      block:
-        - file:
-            path: "{{ item.path }}"
-            owner: "{{ item.owner }}"
-            group: "{{ item.group }}"
-            mode: "{{ item.mode }}"
-          loop:
-            - { path: '/etc/passwd', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/group', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/shadow', owner: 'root', group: 'root', mode: '0000' }
-            - { path: '/etc/gshadow', owner: 'root', group: 'root', mode: '0000' }
-            - { path: '/etc/hosts', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/sysconfig/network', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/sysctl.conf', owner: 'root', group: 'root', mode: '0600' }
-            - { path: '/etc/security/limits.conf', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/security/access.conf', owner: 'root', group: 'root', mode: '0644' }
-            - { path: '/etc/cron.allow', owner: 'root', group: 'root', mode: '0644' }
-      rescue:
-        - name: Log permission setting error
-          lineinfile:
-            path: "{{ error_log_path }}"
-            line: "{{ ansible_date_time.iso8601 }} - Error setting permissions: {{ item.path }} - {{ ansible_failed_result.msg }}"
-          loop: "{{ ansible_failed_task.loop_items }}"
+    with open(source_file, "r", encoding='utf-8') as f_in:
+        chunk_size = 0
+        chunk_index = 1
+        f_out = None
+        for line in f_in:
+            # 如果需要开始新的文件
+            if chunk_size == 0:
+                # 提取日期作为文件名
+                date_prefix = extract_date_from_line(line)
+                if not date_prefix:
+                    date_prefix = f"chunk{chunk_index}"
+                output_file = os.path.join(output_dir, f"{date_prefix}.txt")
+                # 如果文件名已存在，添加索引避免覆盖
+                while os.path.exists(output_file):
+                    output_file = os.path.join(output_dir, f"{date_prefix}_{chunk_index}.txt")
+                    chunk_index += 1
+                if f_out:
+                    f_out.close()
+                f_out = open(output_file, 'w', encoding='utf-8')
+                chunk_size = 0
+            f_out.write(line)
+            line_size = len(line.encode('utf-8'))
+            chunk_size += line_size
+            if chunk_size >= MB_size:
+                chunk_size = 0  # 下次循环将开启新文件
+        if f_out:
+            f_out.close()
+    print("文件拆分完成。")
 
-    - name: Display error log contents
-      command: cat {{ error_log_path }}
-      register: error_log_contents
-
-    - name: Show error log
-      debug:
-        var: error_log_contents.stdout_lines
+if __name__ == "__main__":
+    split_txt_file()
